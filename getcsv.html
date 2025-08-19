@@ -236,7 +236,7 @@
         const quantityRaw = get("Quantity");
         const actionVal = get("Action");
         const ticker = tokenMap[fromProcessVal] || "";
-        const quantity = quantityRaw ? (Number(quantityRaw) / 1e12) : "";
+        const quantity = quantityRaw ? Number(quantityRaw) : "";
 
         let ts = "";
         if (tx.block?.timestamp) {

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>AO Token Transfers</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 24px; }
+    h2 { margin-top: 0; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin-bottom: 12px; }
+    .field { display: flex; flex-direction: column; min-width: 260px; }
+    label { font-size: 12px; opacity: .8; margin-bottom: 4px; }
+    input, select, button { padding: 8px; font-size: 14px; }
+    button { cursor: pointer; }
+    .hint { font-size: 12px; opacity: .7; margin-top: 4px; }
+    .status { margin-top: 12px; font-size: 13px; white-space: pre-line; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+    th { background: #f4f4f4; }
+    #previewArea {
+      max-height: 400px;
+      overflow-y: auto;
+      overflow-x: auto;
+      font-size: 11px;
+    }
+    #previewArea table th,
+    #previewArea table td {
+      white-space: nowrap;
+      max-width: 150px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  </style>
+</head>
+<body>
+  <h2>AO Transaction Explorer</h2>
+
+  <div class="row">
+    <div class="field">
+      <label for="wallet">Wallet-Address</label>
+      <input id="wallet" type="text" placeholder="z.B. abc123..."/>
+    </div>
+
+    <div class="field">
+      <label for="token">Token</label>
+      <select id="token">
+        <option value="">All</option>
+        <option value="0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">AO</option>
+        <option value="qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE">ARIO</option>
+        <option value="7zH9dlMNoxprab9loshv3Y7WG45DOny_Vrq9KrXObdQ">wUSDC</option>
+        <option value="4hXj_E-5fAKmo4E8KjgQvuDJKAFk9P2grhycVmISDLs">PI</option>
+        <option value="xU9zFkq3X2ZQ6olwNVvr1vUWIjc3kXTWr7xKQD6dh10">wAR</option>
+        <option value="NG-0lVX882MG5nhARrSzyprEK6ejonHpdUmaaMPsHE8">qAR</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="action">Type</label>
+      <select id="action">
+        <option value="">All Token Transfers</option>
+        <option value="Credit-Notice">Incoming only</option>
+        <option value="Debit-Notice">Outgoing only</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="startDate">Start Date</label>
+      <input id="startDate" type="date"/>
+    </div>
+
+    <div class="field">
+      <label for="endDate">End Date</label>
+      <input id="endDate" type="date"/>
+    </div>
+
+    <div class="field">
+      <button id="downloadBtn">Download CSV</button>
+    </div>
+
+    <div class="field">
+      <button id="previewBtn">Show Preview</button>
+    </div>
+  </div>
+
+  <div id="previewArea"></div>
+
+  <div class="status" id="status"></div>
+
+  <script>
+    const STATUS = document.getElementById("status");
+
+    const tokenMap = {
+      "0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc": "AO",
+      "qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE": "ARIO",
+      "7zH9dlMNoxprab9loshv3Y7WG45DOny_Vrq9KrXObdQ": "wUSDC",
+      "4hXj_E-5fAKmo4E8KjgQvuDJKAFk9P2grhycVmISDLs": "PI",
+      "xU9zFkq3X2ZQ6olwNVvr1vUWIjc3kXTWr7xKQD6dh10": "wAR",
+      "NG-0lVX882MG5nhARrSzyprEK6ejonHpdUmaaMPsHE8": "qAR",
+    };
+
+    function dateToEpoch(dateStr) {
+      if (!dateStr) return null;
+      const d = new Date(dateStr + "T00:00:00Z");
+      return Math.floor(d.getTime() / 1000);
+    }
+
+    function buildQuery(wallet, fromProcess, action, cursor, startDate, endDate, pageSize=100) {
+      const tagFilters = [`{ name: "Action", values: ["Debit-Notice","Credit-Notice"] }`];
+      if (fromProcess) tagFilters.push(`{ name: "From-Process", values: ["${fromProcess.replace(/"/g,'\\"')}"] }`);
+      if (action) tagFilters[0] = `{ name: "Action", values: ["${action}"] }`;
+
+      let ingestedFilter = "";
+      const minEpoch = dateToEpoch(startDate);
+      const maxEpoch = dateToEpoch(endDate);
+      if (minEpoch && maxEpoch) ingestedFilter = `ingested_at: {min: ${minEpoch}, max: ${maxEpoch}}`;
+      else if (minEpoch) ingestedFilter = `ingested_at: {min: ${minEpoch}}`;
+      else if (maxEpoch) ingestedFilter = `ingested_at: {max: ${maxEpoch}}`;
+
+      return `
+        query {
+          transactions(
+            first: ${pageSize}
+            sort: HEIGHT_DESC
+            recipients: ["${wallet.replace(/"/g,'\\"')}"]
+            tags: [${tagFilters.join(", ")}]
+            ${ingestedFilter}
+            ${cursor ? `after: "${cursor}"` : ""}
+          ) {
+            pageInfo { hasNextPage }
+            edges {
+              cursor
+              node {
+                id
+                recipient
+                block { timestamp }
+                tags { name value }
+              }
+            }
+          }
+        }
+      `;
+    }
+
+    function csvEscape(value) {
+      const s = String(value ?? "");
+      if (s.includes('"') || s.includes(",") || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    }
+
+    function toCSV(rows) {
+      const header = ["Message ID","Timestamp","From","To","From-Process","Token Ticker","Quantity","In/Out"];
+      const out = [header.map(csvEscape).join(",")];
+      for (const r of rows) out.push(r.map(csvEscape).join(","));
+      return out.join("\n");
+    }
+
+    // FULL fetch (used for CSV download) - unchanged
+    async function fetchAll(wallet, fromProcess, action, startDate, endDate) {
+      let cursor = null;
+      const results = [];
+
+      while (true) {
+        const query = buildQuery(wallet, fromProcess, action, cursor, startDate, endDate, 100);
+        const resp = await fetch("https://arweave-search.goldsky.com/graphql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query })
+        });
+        const data = await resp.json();
+        const edges = data?.data?.transactions?.edges || [];
+        if (!edges.length) break;
+
+        for (const edge of edges) {
+          const tx = edge.node;
+          const tags = tx.tags || [];
+          const get = (n) => tags.find(t => t.name === n)?.value || "";
+          const fromProcessVal = get("From-Process");
+          const quantityRaw = get("Quantity");
+          const actionVal = get("Action");
+          const ticker = tokenMap[fromProcessVal] || "";
+          const quantity = quantityRaw ? (Number(quantityRaw) / 1e12) : "";
+
+          let ts = "";
+          if (tx.block?.timestamp) {
+            const d = new Date(tx.block.timestamp * 1000);
+            ts = d.toLocaleString("en-US", {
+              timeZone: "UTC",
+              month: "2-digit", day: "2-digit", year: "numeric",
+              hour: "2-digit", minute: "2-digit", second: "2-digit",
+              hour12: false
+            }).replace(",", "");
+          }
+
+          let from = "";
+          let to = "";
+          let inOut = "";
+          if (actionVal === "Credit-Notice") {
+            from = get("Sender");
+            to = tx.recipient;
+            inOut = "In";
+          } else if (actionVal === "Debit-Notice") {
+            from = tx.recipient;
+            to = get("Recipient");
+            inOut = "Out";
+          }
+
+          results.push([tx.id, ts, from, to, fromProcessVal, ticker, quantity, inOut]);
+        }
+
+        cursor = edges[edges.length - 1].cursor;
+        if (!data?.data?.transactions?.pageInfo?.hasNextPage) break;
+      }
+
+      return results;
+    }
+
+    // PREVIEW fetch (only one page with pageSize, efficient)
+    async function fetchPreview(wallet, fromProcess, action, startDate, endDate, pageSize = 20) {
+      const query = buildQuery(wallet, fromProcess, action, null, startDate, endDate, pageSize);
+      const resp = await fetch("https://arweave-search.goldsky.com/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query })
+      });
+      const data = await resp.json();
+      const edges = data?.data?.transactions?.edges || [];
+      const results = [];
+
+      for (const edge of edges) {
+        const tx = edge.node;
+        const tags = tx.tags || [];
+        const get = (n) => tags.find(t => t.name === n)?.value || "";
+        const fromProcessVal = get("From-Process");
+        const quantityRaw = get("Quantity");
+        const actionVal = get("Action");
+        const ticker = tokenMap[fromProcessVal] || "";
+        const quantity = quantityRaw ? (Number(quantityRaw) / 1e12) : "";
+
+        let ts = "";
+        if (tx.block?.timestamp) {
+          const d = new Date(tx.block.timestamp * 1000);
+          ts = d.toLocaleString("en-US", {
+            timeZone: "UTC",
+            month: "2-digit", day: "2-digit", year: "numeric",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+            hour12: false
+          }).replace(",", "");
+        }
+
+        let from = "";
+        let to = "";
+        let inOut = "";
+        if (actionVal === "Credit-Notice") {
+          from = get("Sender");
+          to = tx.recipient;
+          inOut = "In";
+        } else if (actionVal === "Debit-Notice") {
+          from = tx.recipient;
+          to = get("Recipient");
+          inOut = "Out";
+        }
+
+        results.push([tx.id, ts, from, to, fromProcessVal, ticker, quantity, inOut]);
+      }
+
+      return results;
+    }
+
+    // Render preview table
+    function renderTable(rows) {
+      const table = document.createElement("table");
+      // Header
+      const headerRow = document.createElement("tr");
+      ["Message ID","Timestamp","From","To","From-Process","Token Ticker","Quantity","In/Out"].forEach(h => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        headerRow.appendChild(th);
+      });
+      table.appendChild(headerRow);
+
+      // Data rows
+      rows.forEach(r => {
+        const tr = document.createElement("tr");
+        r.forEach(cell => {
+          const td = document.createElement("td");
+          td.textContent = cell;
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      });
+
+      return table;
+    }
+
+    // showPreview uses fetchPreview (efficient)
+    async function showPreview(wallet, fromProcess, action, startDate, endDate) {
+      STATUS.textContent = "Loading data for preview...";
+      const previewArea = document.getElementById("previewArea");
+      previewArea.innerHTML = "";
+      try {
+        const rows = await fetchPreview(wallet, fromProcess || "", action || "", startDate, endDate, 20);
+        if (!rows.length) {
+          STATUS.textContent = "No results found.";
+          return;
+        }
+        const table = renderTable(rows);
+        previewArea.appendChild(table);
+        STATUS.textContent = `Preview: ${rows.length} rows displayed.`;
+      } catch (e) {
+        console.error(e);
+        STATUS.textContent = "Error loading preview. Details in console.";
+      }
+    }
+
+    document.getElementById("previewBtn").addEventListener("click", () => {
+      const wallet = document.getElementById("wallet").value.trim();
+      const action = document.getElementById("action").value;
+      const token = document.getElementById("token").value;
+      const startDate = document.getElementById("startDate").value;
+      const endDate = document.getElementById("endDate").value;
+
+      if (!wallet) { alert("Please enter a wallet address."); return; }
+      showPreview(wallet, token, action, startDate, endDate);
+    });
+
+    document.getElementById("downloadBtn").addEventListener("click", async () => {
+      const wallet = document.getElementById("wallet").value.trim();
+      const action = document.getElementById("action").value;
+      const token = document.getElementById("token").value;
+      const startDate = document.getElementById("startDate").value;
+      const endDate = document.getElementById("endDate").value;
+
+      if (!wallet) { alert("Please enter a wallet address."); return; }
+
+      STATUS.textContent = "CSV is being generated...";
+      try {
+        const rows = await fetchAll(wallet, token, action, startDate, endDate);
+        if (!rows.length) { STATUS.textContent = "Keine Ergebnisse gefunden."; return; }
+        const csvContent = toCSV(rows);
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `ao_transactions_${wallet}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        STATUS.textContent = `CSV succesfully generated (${rows.length} rows).`;
+      } catch (e) {
+        console.error(e);
+        STATUS.textContent = "Error generating CSV. Details in the console.";
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-# AO Token Explorer
+# AO Wallet Explorer
 
 A web-based tool for exploring AO token transactions and checking wallet balances on the Arweave ecosystem.
 

@@ -84,6 +84,10 @@
     <div class="field">
       <button id="previewBtn">Show Preview</button>
     </div>
+
+    <div class="field">
+      <button id="balanceBtn">Check Balance</button>
+    </div>
   </div>
 
   <div id="previewArea"></div>
@@ -93,7 +97,6 @@
   <script>
     const STATUS = document.getElementById("status");
 
-    // TokenMap erweitert mit Ticker + Umrechnungsfaktor
     const tokenMap = {
       "0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc": { ticker: "AO", factor: 1e12 },
       "qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE": { ticker: "ARIO", factor: 1e6 },
@@ -109,11 +112,10 @@
       "OsK9Vgjxo0ypX_HLz2iJJuh4hp3I80yA9KArsJjIloU": { ticker: "NAB", factor: 1e8 },
     };
 
-    // Hilfsfunktion: Quantity umrechnen
     function convertQuantity(raw, fromProcessVal) {
       if (!raw) return "";
       const tokenInfo = tokenMap[fromProcessVal];
-      if (!tokenInfo) return Number(raw); // falls kein Eintrag existiert
+      if (!tokenInfo) return Number(raw);
       return Number(raw) / tokenInfo.factor;
     }
 
@@ -175,7 +177,120 @@
       return out.join("\n");
     }
 
-    // FULL fetch (für CSV Download)
+    async function fetchTokenBalance(tokenProcess, walletAddress) {
+      const payload = {
+        Id: "1234",
+        Target: tokenProcess,
+        Owner: "1234",
+        Anchor: "0",
+        Data: "1234",
+        Tags: [
+          { name: "Action", value: "Balance" },
+          { name: "Recipient", value: walletAddress },
+          { name: "Data-Protocol", value: "ao" },
+          { name: "Type", value: "Message" },
+          { name: "Variant", value: "ao.TN.1" }
+        ]
+      };
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
+        const resp = await fetch(`https://cu.ao-testnet.xyz/dry-run?process-id=${tokenProcess}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        
+        const data = await resp.json();
+        
+        const messages = data.Messages || [];
+        for (const message of messages) {
+          const tags = message.Tags || [];
+          const balanceTag = tags.find(tag => tag.name === "Balance");
+          if (balanceTag) {
+            return balanceTag.value;
+          }
+        }
+        return "0";
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          console.error(`Timeout fetching balance for ${tokenProcess}`);
+          return "Timeout";
+        }
+        console.error(`Error fetching balance for ${tokenProcess}:`, error);
+        return "Error";
+      }
+    }
+
+    async function checkBalances(walletAddress, specificToken = null) {
+      STATUS.textContent = "Loading balance data...";
+      const previewArea = document.getElementById("previewArea");
+      previewArea.innerHTML = "";
+
+      const tokensToCheck = specificToken ? [specificToken] : Object.keys(tokenMap);
+      const balanceResults = [];
+
+      const balancePromises = tokensToCheck.map(async (tokenProcess) => {
+        const balance = await fetchTokenBalance(tokenProcess, walletAddress);
+        const tokenInfo = tokenMap[tokenProcess] || {};
+        const ticker = tokenInfo.ticker || "Unknown";
+        const convertedBalance = convertQuantity(balance, tokenProcess);
+        const roundedBalance = typeof convertedBalance === 'number' ? convertedBalance.toFixed(2) : convertedBalance;
+        
+        return [tokenProcess, ticker, roundedBalance];
+      });
+
+      try {
+        const results = await Promise.all(balancePromises);
+        balanceResults.push(...results);
+      } catch (error) {
+        console.error("Error fetching some balances:", error);
+        STATUS.textContent = "Error fetching some balances. Check console for details.";
+        return;
+      }
+
+      if (balanceResults.length === 0) {
+        STATUS.textContent = "No balance data found.";
+        return;
+      }
+
+      const table = renderBalanceTable(balanceResults);
+      previewArea.appendChild(table);
+      STATUS.textContent = `Balance check complete: ${balanceResults.length} token(s) checked.`;
+    }
+
+    function renderBalanceTable(rows) {
+      const table = document.createElement("table");
+      const headerRow = document.createElement("tr");
+      ["Token", "Ticker", "Balance"].forEach(h => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        headerRow.appendChild(th);
+      });
+      table.appendChild(headerRow);
+
+      rows.forEach(r => {
+        const tr = document.createElement("tr");
+        r.forEach(cell => {
+          const td = document.createElement("td");
+          td.textContent = cell;
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      });
+
+      return table;
+    }
+
     async function fetchAll(wallet, fromProcess, action, startDate, endDate) {
       let cursor = null;
       const results = [];
@@ -237,7 +352,6 @@
       return results;
     }
 
-    // PREVIEW fetch (einseitig, effizient)
     async function fetchPreview(wallet, fromProcess, action, startDate, endDate, pageSize = 20) {
       const query = buildQuery(wallet, fromProcess, action, null, startDate, endDate, pageSize);
       const resp = await fetch("https://arweave-search.goldsky.com/graphql", {
@@ -291,7 +405,6 @@
       return results;
     }
 
-    // Render preview table
     function renderTable(rows) {
       const table = document.createElement("table");
       const headerRow = document.createElement("tr");
@@ -343,6 +456,14 @@
 
       if (!wallet) { alert("Please enter a wallet address."); return; }
       showPreview(wallet, token, action, startDate, endDate);
+    });
+
+    document.getElementById("balanceBtn").addEventListener("click", () => {
+      const wallet = document.getElementById("wallet").value.trim();
+      const token = document.getElementById("token").value;
+
+      if (!wallet) { alert("Please enter a wallet address."); return; }
+      checkBalances(wallet, token || null);
     });
 
     document.getElementById("downloadBtn").addEventListener("click", async () => {
